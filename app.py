@@ -1,146 +1,169 @@
 import streamlit as st
-import fastf1
-from fastf1 import plotting
 import pandas as pd
+import requests
 import plotly.express as px
-import os
 
-# --------------------------------------------------------------------------------
-# STREAMLIT-CLOUD SAFE CACHE PATH
-# --------------------------------------------------------------------------------
-cache_dir = "/tmp/f1cache"
-os.makedirs(cache_dir, exist_ok=True)
-fastf1.Cache.enable_cache(cache_dir)
-
-# --------------------------------------------------------------------------------
-# PAGE SETTINGS
-# --------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="F1 Telemetry Lab",
+    page_title="F1 Telemetry Lab — OpenF1 Edition",
     page_icon="🏎️",
     layout="wide"
 )
 
-st.title("🏎️ F1 Telemetry Lab")
-st.caption("Sidequest: Built by Amlan on stubbornness, caffeine, and race-engineer delusion.")
+st.title("🏎️ F1 Telemetry Lab — OpenF1 Edition")
+st.caption("Powered by OpenF1 • Built by Amlan • Engineered for chaos & precision ⚡")
 
-# --------------------------------------------------------------------------------
-# SESSION LOADER WITH CACHE
-# --------------------------------------------------------------------------------
+# -----------------------------
+# API ENDPOINTS
+# -----------------------------
+OPENF1_SESSIONS = "https://api.openf1.org/v1/sessions"
+OPENF1_CAR_DATA = "https://api.openf1.org/v1/car_data"
+OPENF1_LAPS = "https://api.openf1.org/v1/laps"
+OPENF1_DRIVERS = "https://api.openf1.org/v1/drivers"
+
+# -----------------------------
+# FETCH SESSION LIST
+# -----------------------------
 @st.cache_data(show_spinner=True)
-def load_f1_session(year, gp_name, session_type):
-    session = fastf1.get_session(year, gp_name, session_type)
-    session.load()                     # loads laps, telemetry, weather, etc.
-    return session
+def get_sessions(year):
+    response = requests.get(OPENF1_SESSIONS, params={"year": year})
+    df = pd.DataFrame(response.json())
+    return df
 
+# -----------------------------
+# FETCH DRIVER LIST FOR A SESSION
+# -----------------------------
+@st.cache_data(show_spinner=True)
+def get_drivers(session_key):
+    response = requests.get(OPENF1_DRIVERS, params={"session_key": session_key})
+    df = pd.DataFrame(response.json())
+    return df
 
-# --------------------------------------------------------------------------------
-# SIDEBAR UI
-# --------------------------------------------------------------------------------
+# -----------------------------
+# FETCH TELEMETRY FOR A DRIVER
+# -----------------------------
+@st.cache_data(show_spinner=True)
+def get_telemetry(session_key, driver_number):
+    params = {
+        "session_key": session_key,
+        "driver_number": driver_number
+    }
+    response = requests.get(OPENF1_CAR_DATA, params=params)
+    df = pd.DataFrame(response.json())
+    return df
+
+# -----------------------------
+# SIDEBAR — SELECT SESSION
+# -----------------------------
 st.sidebar.header("Session Selector")
 
-year = st.sidebar.selectbox("Season", list(reversed(range(2018, 2025))), index=0)
-gp_name = st.sidebar.text_input("Grand Prix (e.g. Monza, Bahrain, Brazil)", "Monza")
-session_type = st.sidebar.selectbox("Session", ["R", "Q", "FP1", "FP2", "FP3"])
+year = st.sidebar.selectbox("Season", list(reversed(range(2018, 2026))), index=0)
 
-load_btn = st.sidebar.button("Load Session Data")
+sessions_df = get_sessions(year)
 
+if sessions_df.empty:
+    st.warning("No sessions available for this year yet.")
+    st.stop()
 
-# --------------------------------------------------------------------------------
-# MAIN EXECUTION
-# --------------------------------------------------------------------------------
-if load_btn:
-    try:
-        session = load_f1_session(year, gp_name, session_type)
-        laps = session.laps
-        drivers = laps['Driver'].unique()
+# Sort by date newest → oldest
+sessions_df = sessions_df.sort_values("date_start", ascending=False)
 
-        st.success(f"Loaded session: {year} {gp_name} {session_type}")
+session_label_map = {
+    row['session_key']: f"{row['circuit_short_name']} — {row['session_name']} ({row['date_start'][:10]})"
+    for _, row in sessions_df.iterrows()
+}
 
-        # -------------------- DRIVER SELECTION --------------------
-        col1, col2 = st.columns(2)
+session_key = st.sidebar.selectbox(
+    "Select a Session",
+    options=session_label_map.keys(),
+    format_func=lambda x: session_label_map[x]
+)
 
-        with col1:
-            driver1 = st.selectbox("Driver 1", drivers, index=0, key="driver1")
-            lap1 = laps.pick_driver(driver1).pick_fastest()
-            st.write(f"**Driver 1 Fastest Lap:** {lap1['LapTime']}")
+# -----------------------------
+# DRIVER SELECTORS
+# -----------------------------
+drivers_df = get_drivers(session_key)
 
-        with col2:
-            driver2 = st.selectbox("Driver 2", drivers, index=1 if len(drivers) > 1 else 0, key="driver2")
-            lap2 = laps.pick_driver(driver2).pick_fastest()
-            st.write(f"**Driver 2 Fastest Lap:** {lap2['LapTime']}")
+driver_numbers = drivers_df["driver_number"].unique()
 
-        if lap1 is None or lap2 is None:
-            st.error("One of the drivers has no fastest lap data.")
-            st.stop()
+col1, col2 = st.sidebar.columns(2)
+driver1 = col1.selectbox("Driver 1", driver_numbers)
+driver2 = col2.selectbox("Driver 2", driver_numbers)
 
-        # -------------------- TELEMETRY --------------------
-        tel1 = lap1.get_car_data().add_distance()
-        tel2 = lap2.get_car_data().add_distance()
+# -----------------------------
+# LOAD TELEMETRY
+# -----------------------------
+st.subheader(f"📊 Telemetry Comparison — Session {session_key}")
 
-        # --------------------------------------------------------------------------------
-        # SPEED COMPARISON
-        # --------------------------------------------------------------------------------
-        st.subheader("📈 Speed vs Distance")
+tel1 = get_telemetry(session_key, driver1)
+tel2 = get_telemetry(session_key, driver2)
 
-        fig_speed = px.line(
-            pd.DataFrame({
-                "Distance": tel1['Distance'],
-                f"{driver1} Speed": tel1['Speed']
-            }),
-            x="Distance",
-            y=f"{driver1} Speed",
-            labels={"Distance": "Distance (m)", f"{driver1} Speed": "Speed (km/h)"}
-        )
+if tel1.empty or tel2.empty:
+    st.error("Telemetry missing for one or both drivers.")
+    st.stop()
 
-        fig_speed.add_scatter(
-            x=tel2['Distance'],
-            y=tel2['Speed'],
-            mode='lines',
-            name=f"{driver2} Speed"
-        )
+# -----------------------------
+# SPEED vs TIME
+# -----------------------------
+st.markdown("## 🏎️ Speed vs Time")
 
-        st.plotly_chart(fig_speed, use_container_width=True)
+fig_speed = px.line(
+    tel1,
+    x="date",
+    y="speed",
+    title=f"Speed — Driver {driver1}",
+    labels={"speed": "Speed (km/h)"}
+)
 
+fig_speed.add_scatter(
+    x=tel2["date"],
+    y=tel2["speed"],
+    mode="lines",
+    name=f"Driver {driver2}"
+)
 
-        # --------------------------------------------------------------------------------
-        # THROTTLE & BRAKE (SIDE BY SIDE)
-        # --------------------------------------------------------------------------------
-        st.subheader("🦶 Throttle & Brake — Driver 1 vs Driver 2")
+st.plotly_chart(fig_speed, use_container_width=True)
 
-        col_t1, col_t2 = st.columns(2)
+# -----------------------------
+# THROTTLE & BRAKE
+# -----------------------------
+st.markdown("## 🦶 Throttle & Brake")
 
-        # ---------------- DRIVER 1 ----------------
-        with col_t1:
-            st.markdown(f"### {driver1} Throttle %")
-            fig_throttle_1 = px.line(
-                tel1, x="Distance", y="Throttle"
-            )
-            st.plotly_chart(fig_throttle_1, use_container_width=True)
+colA, colB = st.columns(2)
 
-            st.markdown(f"### {driver1} Brake")
-            fig_brake_1 = px.line(
-                tel1, x="Distance", y="Brake"
-            )
-            st.plotly_chart(fig_brake_1, use_container_width=True)
+with colA:
+    st.markdown(f"### Driver {driver1}")
+    fig_t1 = px.line(tel1, x="date", y="throttle", title=f"{driver1} — Throttle")
+    st.plotly_chart(fig_t1, use_container_width=True)
 
-        # ---------------- DRIVER 2 ----------------
-        with col_t2:
-            st.markdown(f"### {driver2} Throttle %")
-            fig_throttle_2 = px.line(
-                tel2, x="Distance", y="Throttle"
-            )
-            st.plotly_chart(fig_throttle_2, use_container_width=True)
+    fig_b1 = px.line(tel1, x="date", y="brake", title=f"{driver1} — Brake")
+    st.plotly_chart(fig_b1, use_container_width=True)
 
-            st.markdown(f"### {driver2} Brake")
-            fig_brake_2 = px.line(
-                tel2, x="Distance", y="Brake"
-            )
-            st.plotly_chart(fig_brake_2, use_container_width=True)
+with colB:
+    st.markdown(f"### Driver {driver2}")
+    fig_t2 = px.line(tel2, x="date", y="throttle", title=f"{driver2} — Throttle")
+    st.plotly_chart(fig_t2, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Error loading session: {e}")
-        st.info("Check GP spelling or FastF1 availability.")
+    fig_b2 = px.line(tel2, x="date", y="brake", title=f"{driver2} — Brake")
+    st.plotly_chart(fig_b2, use_container_width=True)
 
-else:
-    st.info("Select a season, a race, and a session — then press **Load Session Data**.")
+# -----------------------------
+# RPM & GEAR
+# -----------------------------
+st.markdown("## ⚙️ RPM & Gear")
+
+colC, colD = st.columns(2)
+
+with colC:
+    fig_rpm = px.line(tel1, x="date", y="rpm", title=f"RPM — Driver {driver1}")
+    fig_rpm.add_scatter(x=tel2["date"], y=tel2["rpm"], mode="lines", name=f"{driver2}")
+    st.plotly_chart(fig_rpm, use_container_width=True)
+
+with colD:
+    fig_gear = px.line(tel1, x="date", y="gear", title=f"Gear — Driver {driver1}")
+    fig_gear.add_scatter(x=tel2["date"], y=tel2["gear"], mode="lines", name=f"{driver2}")
+    st.plotly_chart(fig_gear, use_container_width=True)
+
+# -----------------------------
+# SUCCESS MESSAGE
+# -----------------------------
+st.success("Telemetry loaded successfully via OpenF1 ⚡")
