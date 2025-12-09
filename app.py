@@ -3,9 +3,12 @@ import fastf1
 from fastf1 import plotting
 import pandas as pd
 import plotly.express as px
+import os
 
-# Enable cache for faster loading
-fastf1.Cache.enable_cache('cache')  # this folder will be created in Streamlit cloud too
+# Fix for Streamlit Cloud: use /tmp for caching
+cache_dir = "/tmp/f1cache"
+os.makedirs(cache_dir, exist_ok=True)
+fastf1.Cache.enable_cache(cache_dir)
 
 st.set_page_config(
     page_title="F1 Telemetry Lab",
