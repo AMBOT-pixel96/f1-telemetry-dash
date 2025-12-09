@@ -41,14 +41,33 @@ def get_drivers(session_key):
 # -----------------------------
 # FETCH TELEMETRY FOR A DRIVER
 # -----------------------------
-@st.cache_data(show_spinner=True)
+@@st.cache_data(show_spinner=True)
 def get_telemetry(session_key, driver_number):
-    params = {
-        "session_key": session_key,
-        "driver_number": driver_number
-    }
+    params = {"session_key": session_key, "driver_number": driver_number}
     response = requests.get(OPENF1_CAR_DATA, params=params)
-    df = pd.DataFrame(response.json())
+
+    try:
+        data = response.json()
+    except:
+        return pd.DataFrame()
+
+    # If OpenF1 returns {} or something non-list → fix it
+    if not isinstance(data, list):
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data)
+
+    # If dataframe is empty → return empty safely
+    if df.empty:
+        return df
+
+    # Standardize key fields to avoid missing column crashes
+    expected_cols = ["date", "speed", "throttle", "brake", "rpm", "gear"]
+
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = None
+
     return df
 
 # -----------------------------
