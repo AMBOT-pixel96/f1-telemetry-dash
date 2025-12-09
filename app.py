@@ -41,7 +41,7 @@ def get_drivers(session_key):
 # -----------------------------
 # FETCH TELEMETRY FOR A DRIVER
 # -----------------------------
-@@st.cache_data(show_spinner=True)
+@st.cache_data(show_spinner=True)
 def get_telemetry(session_key, driver_number):
     params = {"session_key": session_key, "driver_number": driver_number}
     response = requests.get(OPENF1_CAR_DATA, params=params)
